@@ -3,13 +3,34 @@ set -euo pipefail
 
 VERSION="0.1.0"
 
+_self="$(readlink "$0" 2>/dev/null || true)"
+[ -n "$_self" ] || _self="$0"
+SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LIB_DIR="$PROJECT_ROOT/lib"
+
+: "${CC_CLOCKER_HOME:=$HOME/.local/share/cc-clocker}"
+: "${CC_CLOCKER_STATE:=$HOME/.local/state/cc-clocker}"
+PID_FILE="$CC_CLOCKER_STATE/pid"
+
+# shellcheck source=lib/log.sh
+source "$LIB_DIR/log.sh"
+# shellcheck source=lib/db.sh
+source "$LIB_DIR/db.sh"
+# shellcheck source=lib/window.sh
+source "$LIB_DIR/window.sh"
+# shellcheck source=lib/ping.sh
+source "$LIB_DIR/ping.sh"
+# shellcheck source=lib/schedule.sh
+source "$LIB_DIR/schedule.sh"
+
 usage() {
     cat <<EOF
 usage: cc-clocker <command> [args]
 
 Commands:
   run       Start the clocker daemon (foreground)
-  status    Show last ping and next scheduled fire
+  status    Show last ping and next scheduled fire (5h + 7d aware)
   tick      Fire one ping immediately
   log [N]   Show last N pings (default 20)
   init      Initialize DB + state dirs
@@ -18,15 +39,168 @@ Commands:
 EOF
 }
 
+cmd_init() {
+    mkdir -p "$CC_CLOCKER_HOME" "$CC_CLOCKER_STATE"
+    db_init
+    log_info "initialized $CC_CLOCKER_HOME"
+}
+
+cmd_tick() {
+    cmd_init >/dev/null 2>&1 || true
+    fire_now
+}
+
+cmd_log() {
+    local n="${1:-20}"
+    cmd_init >/dev/null 2>&1 || true
+    printf 'ts\treset_detected\twhich\tresponse_chars\tok\n'
+    db_recent_pings "$n"
+}
+
+cmd_status() {
+    cmd_init >/dev/null 2>&1 || true
+    local last
+    last="$(db_last_ping)"
+    if [ -z "$last" ]; then
+        echo "no pings recorded yet (never run)"
+    else
+        local last_ts last_reset last_which
+        last_ts="$(printf '%s' "$last" | cut -f1)"
+        last_reset="$(printf '%s' "$last" | cut -f2)"
+        last_which="$(printf '%s' "$last" | cut -f3)"
+        echo "last ping:           $last_ts ($last_which window, reset $last_reset)"
+    fi
+
+    local detected
+    if detected="$(detect_window 2>/dev/null)"; then
+        local next which r5 r7 fire_at
+        next="$(printf '%s' "$detected" | cut -f1)"
+        which="$(printf '%s' "$detected" | cut -f2)"
+        r5="$(printf '%s' "$detected" | cut -f3)"
+        r7="$(printf '%s' "$detected" | cut -f4)"
+        fire_at="$(next_fire_time "$next")"
+        echo "5h reset:            ${r5:-inactive}"
+        echo "7d reset:            ${r7:-inactive}"
+        echo "next fire:           $fire_at  (window=$which)"
+    else
+        echo "5h reset:            inactive"
+        echo "7d reset:            inactive"
+        echo "next fire:           none — no active window"
+    fi
+
+    if [ -f "$PID_FILE" ]; then
+        local pid
+        pid="$(cat "$PID_FILE")"
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "daemon:              running (pid $pid)"
+        else
+            echo "daemon:              stale pid file (pid $pid not alive)"
+        fi
+    else
+        echo "daemon:              not running"
+    fi
+}
+
+cmd_stop() {
+    if [ ! -f "$PID_FILE" ]; then
+        echo "not running"
+        return 0
+    fi
+    local pid
+    pid="$(cat "$PID_FILE")"
+    if ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$PID_FILE"
+        echo "not running (cleared stale pid)"
+        return 0
+    fi
+    kill -TERM "$pid"
+    local i=0
+    while kill -0 "$pid" 2>/dev/null; do
+        i=$((i+1))
+        [ "$i" -ge 50 ] && break
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid"
+    fi
+    rm -f "$PID_FILE"
+    echo "stopped"
+}
+
+cmd_run() {
+    cmd_init >/dev/null 2>&1 || true
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        log_error "already running (pid $(cat "$PID_FILE"))"
+        exit 1
+    fi
+    echo $$ > "$PID_FILE"
+    trap 'rm -f "$PID_FILE"; exit 0' EXIT INT TERM
+    log_info "cc-clocker $VERSION starting (pid $$)"
+    run_loop
+}
+
+cmd_doctor() {
+    local rc=0
+    echo "checking dependencies..."
+    for tool in claude sqlite3 jq; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            echo "  $tool: $(command -v "$tool")"
+        else
+            echo "  $tool: NOT FOUND"
+            rc=1
+        fi
+    done
+
+    echo "checking ~/.claude/projects access..."
+    : "${CC_CLAUDE_HOME:=$HOME/.claude}"
+    if [ -d "$CC_CLAUDE_HOME/projects" ]; then
+        echo "  ok: $CC_CLAUDE_HOME/projects"
+    else
+        echo "  missing: $CC_CLAUDE_HOME/projects (run claude at least once)"
+        rc=1
+    fi
+
+    echo "checking window detection..."
+    local detected
+    if detected="$(detect_window 2>/dev/null)"; then
+        echo "  active: $(printf '%s' "$detected" | cut -f2) reset $(printf '%s' "$detected" | cut -f1)"
+    else
+        echo "  no active window (run a real claude session to validate detection)"
+    fi
+
+    echo "checking claude auth (synthetic ping)..."
+    if CLAUDE_CODE_SIMPLE=1 claude -p "ok" \
+        --no-session-persistence --tools "" \
+        --strict-mcp-config --mcp-config /dev/null \
+        --setting-sources "user" \
+        --model claude-haiku-4-5-20251001 \
+        --output-format text >/dev/null 2>&1; then
+        echo "  ok"
+    else
+        echo "  FAIL — check 'claude auth' status"
+        rc=1
+    fi
+
+    return "$rc"
+}
+
 main() {
     if [ "$#" -eq 0 ]; then
         usage
         exit 1
     fi
-    case "$1" in
+    local cmd="$1"; shift || true
+    case "$cmd" in
         --version|-v) echo "$VERSION" ;;
-        --help|-h) usage ;;
-        *) echo "unknown command: $1" >&2; usage; exit 1 ;;
+        --help|-h)    usage ;;
+        run)          cmd_run "$@" ;;
+        status)       cmd_status "$@" ;;
+        tick)         cmd_tick "$@" ;;
+        log)          cmd_log "$@" ;;
+        init)         cmd_init "$@" ;;
+        stop)         cmd_stop "$@" ;;
+        doctor)       cmd_doctor "$@" ;;
+        *)            echo "unknown command: $cmd" >&2; usage; exit 1 ;;
     esac
 }
 
