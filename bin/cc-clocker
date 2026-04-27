@@ -169,10 +169,9 @@ cmd_doctor() {
     fi
 
     echo "checking claude auth (synthetic ping)..."
-    if CLAUDE_CODE_SIMPLE=1 claude -p "ok" \
+    if CC_CLOCKER_PING=1 claude -p "ok" \
         --no-session-persistence --tools "" \
-        --strict-mcp-config --mcp-config /dev/null \
-        --setting-sources "user" \
+        --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
         --model claude-haiku-4-5-20251001 \
         --output-format text >/dev/null 2>&1; then
         echo "  ok"

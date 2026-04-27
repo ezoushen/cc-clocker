@@ -32,8 +32,8 @@ detect_window() {
     [ -n "$all_ts" ] || return 1
 
     local start_5h start_7d reset_5h="" reset_7d=""
-    start_5h="$(printf '%s\n' "$all_ts" | awk -v c="$cutoff_5h" '$0 >= c { print; exit }')"
-    start_7d="$(printf '%s\n' "$all_ts" | awk -v c="$cutoff_7d" '$0 >= c { print; exit }')"
+    start_5h="$(awk -v c="$cutoff_5h" '$0 >= c { print; exit }' <<< "$all_ts")"
+    start_7d="$(awk -v c="$cutoff_7d" '$0 >= c { print; exit }' <<< "$all_ts")"
 
     [ -n "$start_5h" ] && reset_5h="$(_iso_offset "$start_5h" '+5 hours')"
     [ -n "$start_7d" ] && reset_7d="$(_iso_offset "$start_7d" '+7 days')"
@@ -62,6 +62,6 @@ _iso_now_offset() {
 }
 
 _iso_offset() {
-    [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+    [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || return 1
     sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('$1','$2'));"
 }

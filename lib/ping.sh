@@ -13,15 +13,13 @@ fire_ping() {
 
     local out rc=0
     out="$(
-        CLAUDE_CODE_SIMPLE=1 \
+        CC_CLOCKER_PING=1 \
         claude -p "reply with: ok" \
             --no-session-persistence \
             --disable-slash-commands \
             --tools "" \
-            --strict-mcp-config --mcp-config /dev/null \
-            --setting-sources "user" \
+            --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
             --model claude-haiku-4-5-20251001 \
-            --fallback-model claude-haiku-4-5-20251001 \
             --output-format text \
             2>/dev/null
     )" || rc=$?

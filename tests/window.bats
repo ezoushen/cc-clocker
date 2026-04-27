@@ -83,6 +83,20 @@ PY
     [ "$which" = "5h" ]
 }
 
+@test "detect_window: handles real Claude Code timestamps (with milliseconds)" {
+    # Real ~/.claude/projects/*.jsonl timestamps look like "2026-04-27T11:55:22.339Z".
+    local ts
+    ts="$(python3 -c 'import datetime as dt; print((dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S.339Z"))')"
+    printf '{"type":"user","timestamp":"%s","message":"x"}\n' "$ts" \
+        > "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
+    run detect_window
+    [ "$status" -eq 0 ]
+    which=$(printf '%s' "$output" | cut -f2)
+    [ "$which" = "5h" ]
+    r5=$(printf '%s' "$output" | cut -f3)
+    [ -n "$r5" ]
+}
+
 @test "detect_window: 5h reset chosen iff sooner than 7d" {
     _install_fixture active-5h.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
     run detect_window

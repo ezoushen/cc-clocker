@@ -22,9 +22,7 @@ setup() {
     [[ "$output" == *"--tools"* ]]
     [[ "$output" == *"--strict-mcp-config"* ]]
     [[ "$output" == *"--mcp-config"* ]]
-    [[ "$output" == *"/dev/null"* ]]
-    [[ "$output" == *"--setting-sources"* ]]
-    [[ "$output" == *"user"* ]]
+    [[ "$output" == *"mcpServers"* ]]
     [[ "$output" == *"claude-haiku-4-5-20251001"* ]]
     [[ "$output" == *"--output-format"* ]]
     [[ "$output" == *"text"* ]]
@@ -62,7 +60,12 @@ setup() {
     [ "$output" = "7d" ]
 }
 
-@test "ping.sh source contains CLAUDE_CODE_SIMPLE=1" {
-    run grep -F "CLAUDE_CODE_SIMPLE=1" "$PROJECT_ROOT/lib/ping.sh"
+@test "ping.sh source contains CC_CLOCKER_PING=1" {
+    run grep -F "CC_CLOCKER_PING=1" "$PROJECT_ROOT/lib/ping.sh"
     [ "$status" -eq 0 ]
+}
+
+@test "ping.sh does NOT set CLAUDE_CODE_SIMPLE=1 (would force API key auth)" {
+    run grep -F "CLAUDE_CODE_SIMPLE=1" "$PROJECT_ROOT/lib/ping.sh"
+    [ "$status" -ne 0 ]
 }

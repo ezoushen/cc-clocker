@@ -42,11 +42,13 @@ Uses your existing Claude Code OAuth subscription. Run `claude` once to log in. 
 
 ## Hooks
 
-Each ping launches a real `claude` subprocess, so user-level hooks fire. The daemon exports `CLAUDE_CODE_SIMPLE=1` in the ping env — gate noisy hooks on that variable to skip pings:
+Each ping launches a real `claude` subprocess, so user-level hooks fire. The daemon exports `CC_CLOCKER_PING=1` in the ping env — gate noisy hooks on that variable to skip pings:
 
 ```sh
-[ -n "$CLAUDE_CODE_SIMPLE" ] && exit 0
+[ -n "$CC_CLOCKER_PING" ] && exit 0
 ```
+
+`CLAUDE_CODE_SIMPLE` is intentionally NOT set, because doing so would force `ANTHROPIC_API_KEY` auth (same as `--bare`) and bypass the OAuth subscription window cc-clocker is meant to keep warm.
 
 ## Files
 
