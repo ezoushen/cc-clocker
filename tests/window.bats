@@ -41,12 +41,34 @@ PY
     [ "$which" = "5h" ]
 }
 
-@test "detect_window: idle (>5h, <7d) -> picks 7d reset" {
+@test "detect_window: idle (>5h, <7d) -> exit 1 (no env override)" {
+    # 7d is no longer auto-detected from jsonl; idle 5h means no window.
     _install_fixture idle-but-7d-active.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
     run detect_window
+    [ "$status" -ne 0 ]
+}
+
+@test "detect_window: idle 5h + CC_CLOCKER_NEXT_7D_RESET env -> picks 7d" {
+    _install_fixture idle-but-7d-active.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
+    local future
+    future="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','+2 hours'));")"
+    run env CC_CLOCKER_NEXT_7D_RESET="$future" \
+        bash -c "source '$PROJECT_ROOT/lib/window.sh'; detect_window"
     [ "$status" -eq 0 ]
     which=$(printf '%s' "$output" | cut -f2)
     [ "$which" = "7d" ]
+    r7=$(printf '%s' "$output" | cut -f4)
+    [ "$r7" = "$future" ]
+}
+
+@test "detect_window: ignores past CC_CLOCKER_NEXT_7D_RESET" {
+    _install_fixture active-5h.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
+    local past="2020-01-01T00:00:00Z"
+    run env CC_CLOCKER_NEXT_7D_RESET="$past" \
+        bash -c "source '$PROJECT_ROOT/lib/window.sh'; detect_window"
+    [ "$status" -eq 0 ]
+    r7=$(printf '%s' "$output" | cut -f4)
+    [ -z "$r7" ]
 }
 
 @test "detect_window: all msgs >7d old -> exit 1" {
@@ -97,14 +119,17 @@ PY
     [ -n "$r5" ]
 }
 
-@test "detect_window: 5h reset chosen iff sooner than 7d" {
+@test "detect_window: 5h reset chosen iff sooner than env 7d" {
     _install_fixture active-5h.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
-    run detect_window
-    next=$(printf '%s' "$output" | cut -f1)
+    local far_future
+    far_future="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','+30 days'));")"
+    run env CC_CLOCKER_NEXT_7D_RESET="$far_future" \
+        bash -c "source '$PROJECT_ROOT/lib/window.sh'; detect_window"
+    [ "$status" -eq 0 ]
+    which=$(printf '%s' "$output" | cut -f2)
+    [ "$which" = "5h" ]
     r5=$(printf '%s' "$output" | cut -f3)
     r7=$(printf '%s' "$output" | cut -f4)
-    [ "$next" = "$r5" ]
-    [ -n "$r7" ]
-    # r5 < r7 lexicographically (ISO8601)
+    [ "$r7" = "$far_future" ]
     [[ "$r5" < "$r7" ]]
 }

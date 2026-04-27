@@ -179,6 +179,27 @@ cmd_doctor() {
     else
         echo "  no active window (run a real claude session to validate detection)"
     fi
+    if [ -z "${CC_CLOCKER_NEXT_7D_RESET:-}" ]; then
+        echo "  note: 7d window not auto-detected; export CC_CLOCKER_NEXT_7D_RESET=<ISO8601 UTC>"
+        echo "        if you want pings to also fire 30s after the 7d weekly reset"
+    fi
+
+    echo "checking user hooks (will fire on every ping)..."
+    local hook_files=(~/.claude/settings.json ~/.claude/hooks.json)
+    local hook_count=0
+    for hf in "${hook_files[@]}"; do
+        [ -f "$hf" ] || continue
+        local n
+        n="$(jq -r '.hooks // {} | to_entries | map(.value | length) | add // 0' "$hf" 2>/dev/null)"
+        [ -n "$n" ] && [ "$n" != "null" ] && hook_count=$((hook_count + n))
+    done
+    if [ "$hook_count" -gt 0 ]; then
+        echo "  found $hook_count user-level hook(s) — they WILL fire on every ping"
+        echo "  gate them in their command body with:"
+        echo "      [ -n \"\$CC_CLOCKER_PING\" ] && exit 0"
+    else
+        echo "  no user-level hooks found"
+    fi
 
     echo "checking claude auth (synthetic ping)..."
     if CC_CLOCKER_PING=1 claude -p "ok" \

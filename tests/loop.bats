@@ -35,11 +35,13 @@ setup() {
     [ "$which" = "5h" ]
 }
 
-@test "run_once_or_sleep with idle (>5h, <7d) picks 7d" {
+@test "run_once_or_sleep with idle 5h + CC_CLOCKER_NEXT_7D_RESET picks 7d" {
     ts=$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-3 days'));")
     printf '{"type":"user","timestamp":"%s","message":"x"}\n' "$ts" \
         > "$CC_CLAUDE_HOME/projects/p1/s.jsonl"
-    run run_once_or_sleep
+    local future
+    future="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','+1 hour'));")"
+    CC_CLOCKER_NEXT_7D_RESET="$future" run run_once_or_sleep
     [ "$status" -eq 3 ]
     which=$(printf '%s' "$output" | cut -f2)
     [ "$which" = "7d" ]
