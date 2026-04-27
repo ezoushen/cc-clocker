@@ -81,7 +81,7 @@ cmd_set_anchor() {
         return 1
     fi
     db_set_anchor "$org_id" "$kind" "$iso"
-    echo "saved $kind anchor for org $org_id: $iso"
+    echo "saved $kind anchor for org $org_id: $iso ($(fmt_local "$iso"))"
 }
 
 cmd_statusline_tee() {
@@ -133,7 +133,14 @@ cmd_log() {
     local n="${1:-20}"
     cmd_init >/dev/null 2>&1 || true
     printf 'ts\treset_detected\twhich\tresponse_chars\tok\n'
-    db_recent_pings "$n"
+    # DB stores UTC; convert ts and reset_detected to local TZ for display.
+    local ts reset_d which chars ok
+    while IFS=$'\t' read -r ts reset_d which chars ok; do
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+            "$(fmt_local "$ts")" \
+            "$(fmt_local "$reset_d")" \
+            "$which" "$chars" "$ok"
+    done < <(db_recent_pings "$n")
 }
 
 cmd_status() {
@@ -147,7 +154,7 @@ cmd_status() {
         last_ts="$(printf '%s' "$last" | cut -f1)"
         last_reset="$(printf '%s' "$last" | cut -f2)"
         last_which="$(printf '%s' "$last" | cut -f3)"
-        echo "last ping:           $last_ts ($last_which window, reset $last_reset)"
+        echo "last ping:           $(fmt_local "$last_ts") ($last_which window, reset $(fmt_local "$last_reset"))"
     fi
 
     local detected
@@ -158,9 +165,9 @@ cmd_status() {
         r5="$(printf '%s' "$detected" | cut -f3)"
         r7="$(printf '%s' "$detected" | cut -f4)"
         fire_at="$(next_fire_time "$next")"
-        echo "5h reset:            ${r5:-inactive}"
-        echo "7d reset:            ${r7:-inactive}"
-        echo "next fire:           $fire_at  (window=$which)"
+        if [ -n "$r5" ]; then echo "5h reset:            $(fmt_local "$r5")"; else echo "5h reset:            inactive"; fi
+        if [ -n "$r7" ]; then echo "7d reset:            $(fmt_local "$r7")"; else echo "7d reset:            inactive"; fi
+        echo "next fire:           $(fmt_local "$fire_at")  (window=$which)"
     else
         echo "5h reset:            inactive"
         echo "7d reset:            inactive"
@@ -242,7 +249,7 @@ cmd_doctor() {
     echo "checking window detection..."
     local detected
     if detected="$(detect_window 2>/dev/null)"; then
-        echo "  active: $(printf '%s' "$detected" | cut -f2) reset $(printf '%s' "$detected" | cut -f1)"
+        echo "  active: $(printf '%s' "$detected" | cut -f2) reset $(fmt_local "$(printf '%s' "$detected" | cut -f1)")"
     else
         echo "  no active window (run a real claude session to validate detection)"
     fi
@@ -253,7 +260,12 @@ cmd_doctor() {
         local cached_org cached_at
         cached_org="$(jq -r 'try .org_id // empty' "$cache_file" 2>/dev/null)"
         cached_at="$(jq -r 'try .captured_at // empty' "$cache_file" 2>/dev/null)"
-        echo "  found: $cache_file (org=$cached_org, captured_at=$cached_at)"
+        # captured_at is a unix epoch (float). Convert to local ISO for display.
+        local cached_at_local=""
+        if [[ "$cached_at" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            cached_at_local="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%S', ${cached_at}, 'unixepoch', 'localtime');")$(date '+%z')"
+        fi
+        echo "  found: $cache_file (org=$cached_org, captured_at=${cached_at_local:-$cached_at})"
     else
         echo "  not found at $cache_file"
         echo "  to enable drift-free, account-aware reset detection:"

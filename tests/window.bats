@@ -4,6 +4,9 @@ load 'test_helper'
 
 setup() {
     export CC_CLAUDE_HOME="$BATS_TEST_TMPDIR/claude"
+    # Isolate from the host's real cache + claude auth.
+    export CC_CLOCKER_CACHE_FILE="$BATS_TEST_TMPDIR/rate-limits.json"
+    export CC_CLOCKER_ORG_ID=""
     mkdir -p "$CC_CLAUDE_HOME/projects/proj1"
     source "$PROJECT_ROOT/lib/window.sh"
 }
