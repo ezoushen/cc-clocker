@@ -38,14 +38,18 @@ COPY bin /opt/cc-clocker/bin
 COPY lib /opt/cc-clocker/lib
 COPY contrib /opt/cc-clocker/contrib
 COPY README.md install.sh Makefile /opt/cc-clocker/
-RUN chmod +x /opt/cc-clocker/bin/cc-clocker /opt/cc-clocker/install.sh \
+RUN chmod +x \
+        /opt/cc-clocker/bin/cc-clocker \
+        /opt/cc-clocker/install.sh \
+        /opt/cc-clocker/contrib/docker/entrypoint.sh \
+        /opt/cc-clocker/contrib/docker/silent-statusline.sh \
     && ln -sf /opt/cc-clocker/bin/cc-clocker /usr/local/bin/cc-clocker
 
-# Pre-create the home dirs so first-run never trips on missing parents.
-RUN mkdir -p /root/.claude /root/.cc-clocker /root/.local/share/cc-clocker /root/.local/state/cc-clocker
-
+# Volumes: state survives `docker rm`. The entrypoint re-asserts these dirs
+# on every start because the volume mount overlays the image filesystem.
 VOLUME ["/root/.claude", "/root/.cc-clocker", "/root/.local/share/cc-clocker"]
 
 WORKDIR /root
 
+ENTRYPOINT ["/opt/cc-clocker/contrib/docker/entrypoint.sh"]
 CMD ["/bin/bash", "-l"]

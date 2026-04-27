@@ -285,17 +285,24 @@ cmd_doctor() {
 
     echo "checking statusline rate-limits cache..."
     local cache_file="${CC_CLOCKER_CACHE_FILE:-$HOME/.cc-clocker/rate-limits.json}"
+    local statusline_cmd=""
+    [ -f "$HOME/.claude/settings.json" ] \
+        && statusline_cmd="$(jq -r 'try .statusLine.command // empty' "$HOME/.claude/settings.json" 2>/dev/null)"
+    local statusline_configured=0
+    [[ "$statusline_cmd" == *"statusline-tee"* ]] && statusline_configured=1
+
     if [ -f "$cache_file" ]; then
         local cached_org cached_at
         cached_org="$(jq -r 'try .org_id // empty' "$cache_file" 2>/dev/null)"
         cached_at="$(jq -r 'try .captured_at // empty' "$cache_file" 2>/dev/null)"
-        # captured_at is a unix epoch float. Convert to ISO UTC then to friendly.
         local captured_iso="" captured_friendly="never"
         if [[ "$cached_at" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
             captured_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ${cached_at}, 'unixepoch');")"
             captured_friendly="$(fmt_when_with_relative "$captured_iso")"
         fi
         echo "  found, captured $captured_friendly (org $cached_org)"
+    elif [ "$statusline_configured" = "1" ]; then
+        echo "  not yet — statusline-tee configured, will populate after first interactive 'claude' session"
     else
         echo "  not found at $cache_file"
         echo "  to enable drift-free, account-aware reset detection:"
