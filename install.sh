@@ -13,8 +13,8 @@ cat <<EOF
 Autostart options:
 
   macOS (launchd):
-    cp $PROJECT_ROOT/contrib/launchd/com.ezou.cc-clocker.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.ezou.cc-clocker.plist
+    cp $PROJECT_ROOT/contrib/launchd/com.github.ezoushen.cc-clocker.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.github.ezoushen.cc-clocker.plist
 
   Linux (systemd --user):
     mkdir -p ~/.config/systemd/user
