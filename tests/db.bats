@@ -65,3 +65,15 @@ setup() {
     n=$(printf '%s\n' "$output" | wc -l | tr -d ' ')
     [ "$n" = "3" ]
 }
+
+@test "db_recent_pings rejects non-integer n and falls back to default" {
+    db_init
+    for i in 1 2 3; do
+        db_insert_ping "2026-04-27T0${i}:00:00Z" "x" "5h" 1 1
+    done
+    run db_recent_pings "1; DROP TABLE pings;--"
+    [ "$status" -eq 0 ]
+    # rows still present
+    run sqlite3 "$CC_CLOCKER_HOME/clocker.db" "SELECT count(*) FROM pings;"
+    [ "$output" = "3" ]
+}

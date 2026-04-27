@@ -37,5 +37,6 @@ db_last_ping() {
 
 db_recent_pings() {
     local n="${1:-20}"
+    [[ "$n" =~ ^[0-9]+$ ]] || n=20
     _db_exec -separator $'\t' "SELECT ts, reset_detected, which_window, response_chars, ok FROM pings ORDER BY id DESC LIMIT $n;"
 }
