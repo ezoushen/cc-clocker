@@ -13,6 +13,18 @@ LIB_DIR="$PROJECT_ROOT/lib"
 : "${CC_CLOCKER_STATE:=$HOME/.local/state/cc-clocker}"
 PID_FILE="$CC_CLOCKER_STATE/pid"
 
+# Bootstrap PATH so launchd / systemd / cron sessions (which start with a
+# minimal PATH) can still find `claude`, `jq`, and friends. We append the
+# common user / homebrew bin locations so the inherited PATH still wins.
+for _extra in "$HOME/.local/bin" /opt/homebrew/bin /usr/local/bin; do
+    case ":$PATH:" in
+        *":$_extra:"*) ;;
+        *) [ -d "$_extra" ] && PATH="$PATH:$_extra" ;;
+    esac
+done
+unset _extra
+export PATH
+
 # shellcheck source=lib/log.sh
 source "$LIB_DIR/log.sh"
 # shellcheck source=lib/db.sh

@@ -6,8 +6,7 @@
     <string>com.github.ezoushen.cc-clocker</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/env</string>
-        <string>bash</string>
+        <string>/bin/bash</string>
         <string>-lc</string>
         <string>exec "$HOME/.local/bin/cc-clocker" run</string>
     </array>
