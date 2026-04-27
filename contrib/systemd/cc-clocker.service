@@ -1,0 +1,12 @@
+[Unit]
+Description=cc-clocker daemon — keeps Claude Code 5h+7d windows adjacent
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cc-clocker run
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=default.target
