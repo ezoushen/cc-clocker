@@ -5,6 +5,7 @@
 
 _db_path() { printf '%s/clocker.db' "$CC_CLOCKER_HOME"; }
 
+# shellcheck disable=SC2120  # called both with heredoc and with sql string args (Task 4)
 _db_exec() {
     sqlite3 -batch "$(_db_path)" "$@"
 }
