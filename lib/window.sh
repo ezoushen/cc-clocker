@@ -25,7 +25,7 @@ detect_window() {
     all_ts="$(
         find "$projects_dir" -type f -name '*.jsonl' -print0 2>/dev/null \
             | xargs -0 cat 2>/dev/null \
-            | jq -r 'try .timestamp // empty' 2>/dev/null \
+            | jq -rR 'try (fromjson | .timestamp // empty) // empty' 2>/dev/null \
             | sort
     )"
 
@@ -62,5 +62,6 @@ _iso_now_offset() {
 }
 
 _iso_offset() {
+    [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
     sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('$1','$2'));"
 }

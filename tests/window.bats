@@ -73,6 +73,16 @@ PY
     [ "$status" -ne 0 ]
 }
 
+@test "detect_window: recovers timestamps after malformed line" {
+    _install_fixture malformed.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
+    run detect_window
+    [ "$status" -eq 0 ]
+    # Both 5h and 7d windows should be active; the bad line must not have
+    # dropped the recent timestamp.
+    which=$(printf '%s' "$output" | cut -f2)
+    [ "$which" = "5h" ]
+}
+
 @test "detect_window: 5h reset chosen iff sooner than 7d" {
     _install_fixture active-5h.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
     run detect_window
