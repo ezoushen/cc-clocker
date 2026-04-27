@@ -81,7 +81,8 @@ cmd_set_anchor() {
         return 1
     fi
     db_set_anchor "$org_id" "$kind" "$iso"
-    echo "saved $kind anchor for org $org_id: $iso ($(fmt_local "$iso"))"
+    printf 'Saved %s anchor for org %s\n  %s — %s\n' \
+        "$kind" "$org_id" "$iso" "$(fmt_when "$iso")"
 }
 
 cmd_statusline_tee() {
@@ -132,29 +133,47 @@ cmd_tick() {
 cmd_log() {
     local n="${1:-20}"
     cmd_init >/dev/null 2>&1 || true
-    printf 'ts\treset_detected\twhich\tresponse_chars\tok\n'
-    # DB stores UTC; convert ts and reset_detected to local TZ for display.
-    local ts reset_d which chars ok
+    # Tabular, friendly. Pipe-friendly columns padded with spaces.
+    printf '\n  %-22s %-13s %-7s %4s\n' "WHEN" "RESET FOLLOWED" "WINDOW" "OK"
+    printf '  %-22s %-13s %-7s %4s\n'   "----" "--------------" "------" "--"
+    local ts reset_d which chars ok ok_label
+    local rows=0
     while IFS=$'\t' read -r ts reset_d which chars ok; do
-        printf '%s\t%s\t%s\t%s\t%s\n' \
-            "$(fmt_local "$ts")" \
-            "$(fmt_local "$reset_d")" \
-            "$which" "$chars" "$ok"
+        ok_label="yes"; [ "$ok" = "0" ] && ok_label="no"
+        printf '  %-22s %-13s %-7s %4s\n' \
+            "$(fmt_when_with_relative "$ts")" \
+            "$(fmt_when "$reset_d")" \
+            "$which" "$ok_label"
+        rows=$((rows+1))
     done < <(db_recent_pings "$n")
+    if [ "$rows" -eq 0 ]; then
+        printf '  (no pings yet)\n'
+    fi
+    printf '\n'
 }
 
 cmd_status() {
     cmd_init >/dev/null 2>&1 || true
+
+    # Header: current local time + TZ offset.
+    local now_local now_tz
+    now_local="$(date '+%a %b %d, %H:%M')"
+    now_tz="$(date '+%z')"
+    printf '\n  cc-clocker %s — %s (%s)\n\n' "$VERSION" "$now_local" "$now_tz"
+
     local last
     last="$(db_last_ping)"
     if [ -z "$last" ]; then
-        echo "no pings recorded yet (never run)"
+        printf '  Last ping     never\n'
     else
-        local last_ts last_reset last_which
+        local last_ts last_which last_ok
         last_ts="$(printf '%s' "$last" | cut -f1)"
-        last_reset="$(printf '%s' "$last" | cut -f2)"
         last_which="$(printf '%s' "$last" | cut -f3)"
-        echo "last ping:           $(fmt_local "$last_ts") ($last_which window, reset $(fmt_local "$last_reset"))"
+        last_ok="$(printf '%s' "$last" | cut -f5)"
+        local ok_label="ok"
+        [ "$last_ok" = "0" ] && ok_label="failed"
+        printf '  Last ping     %s — %s window, %s\n' \
+            "$(fmt_when_with_relative "$last_ts")" "$last_which" "$ok_label"
     fi
 
     local detected
@@ -165,25 +184,35 @@ cmd_status() {
         r5="$(printf '%s' "$detected" | cut -f3)"
         r7="$(printf '%s' "$detected" | cut -f4)"
         fire_at="$(next_fire_time "$next")"
-        if [ -n "$r5" ]; then echo "5h reset:            $(fmt_local "$r5")"; else echo "5h reset:            inactive"; fi
-        if [ -n "$r7" ]; then echo "7d reset:            $(fmt_local "$r7")"; else echo "7d reset:            inactive"; fi
-        echo "next fire:           $(fmt_local "$fire_at")  (window=$which)"
+
+        if [ -n "$r5" ]; then
+            printf '  5h reset      %s\n' "$(fmt_when_with_relative "$r5")"
+        else
+            printf '  5h reset      inactive\n'
+        fi
+        if [ -n "$r7" ]; then
+            printf '  7d reset      %s\n' "$(fmt_when_with_relative "$r7")"
+        else
+            printf '  7d reset      inactive\n'
+        fi
+        printf '  Next fire     %s — %s window\n' \
+            "$(fmt_when_with_relative "$fire_at")" "$which"
     else
-        echo "5h reset:            inactive"
-        echo "7d reset:            inactive"
-        echo "next fire:           none — no active window"
+        printf '  5h reset      inactive\n'
+        printf '  7d reset      inactive\n'
+        printf '  Next fire     none — no active window detected\n'
     fi
 
     if [ -f "$PID_FILE" ]; then
         local pid
         pid="$(cat "$PID_FILE")"
         if kill -0 "$pid" 2>/dev/null; then
-            echo "daemon:              running (pid $pid)"
+            printf '  Daemon        running · pid %s\n\n' "$pid"
         else
-            echo "daemon:              stale pid file (pid $pid not alive)"
+            printf '  Daemon        stale pid file (pid %s not alive)\n\n' "$pid"
         fi
     else
-        echo "daemon:              not running"
+        printf '  Daemon        not running\n\n'
     fi
 }
 
@@ -249,7 +278,7 @@ cmd_doctor() {
     echo "checking window detection..."
     local detected
     if detected="$(detect_window 2>/dev/null)"; then
-        echo "  active: $(printf '%s' "$detected" | cut -f2) reset $(fmt_local "$(printf '%s' "$detected" | cut -f1)")"
+        echo "  active: $(printf '%s' "$detected" | cut -f2) reset $(fmt_when_with_relative "$(printf '%s' "$detected" | cut -f1)")"
     else
         echo "  no active window (run a real claude session to validate detection)"
     fi
@@ -260,12 +289,13 @@ cmd_doctor() {
         local cached_org cached_at
         cached_org="$(jq -r 'try .org_id // empty' "$cache_file" 2>/dev/null)"
         cached_at="$(jq -r 'try .captured_at // empty' "$cache_file" 2>/dev/null)"
-        # captured_at is a unix epoch (float). Convert to local ISO for display.
-        local cached_at_local=""
+        # captured_at is a unix epoch float. Convert to ISO UTC then to friendly.
+        local captured_iso="" captured_friendly="never"
         if [[ "$cached_at" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-            cached_at_local="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%S', ${cached_at}, 'unixepoch', 'localtime');")$(date '+%z')"
+            captured_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ${cached_at}, 'unixepoch');")"
+            captured_friendly="$(fmt_when_with_relative "$captured_iso")"
         fi
-        echo "  found: $cache_file (org=$cached_org, captured_at=${cached_at_local:-$cached_at})"
+        echo "  found, captured $captured_friendly (org $cached_org)"
     else
         echo "  not found at $cache_file"
         echo "  to enable drift-free, account-aware reset detection:"

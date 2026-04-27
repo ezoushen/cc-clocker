@@ -41,8 +41,10 @@ setup() {
     "$PROJECT_ROOT/bin/cc-clocker" tick
     run "$PROJECT_ROOT/bin/cc-clocker" log 2
     [ "$status" -eq 0 ]
-    n=$(printf '%s\n' "$output" | grep -c '^')
-    [ "$n" -le 3 ]
+    # Count rows that end with the OK column ("yes" / "no") -> these are
+    # actual ping rows. Header lines do not match.
+    n=$(printf '%s\n' "$output" | grep -cE '(yes|no)\s*$')
+    [ "$n" -eq 2 ]
 }
 
 @test "status with no pings prints 'no pings'" {
@@ -57,7 +59,7 @@ setup() {
     "$PROJECT_ROOT/bin/cc-clocker" tick
     run "$PROJECT_ROOT/bin/cc-clocker" status
     [ "$status" -eq 0 ]
-    [[ "$output" == *"last ping"* ]]
+    [[ "$output" == *"Last ping"* ]]
 }
 
 @test "status shows 5h and 7d resets when window active" {
@@ -68,7 +70,7 @@ setup() {
     run "$PROJECT_ROOT/bin/cc-clocker" status
     [[ "$output" == *"5h reset"* ]]
     [[ "$output" == *"7d reset"* ]]
-    [[ "$output" == *"next fire"* ]]
+    [[ "$output" == *"Next fire"* ]]
 }
 
 @test "stop reports not running when no pid file" {

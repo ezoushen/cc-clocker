@@ -68,7 +68,7 @@ run_loop() {
                 s="$(printf '%s' "$out" | cut -f1)"
                 local w
                 w="$(printf '%s' "$out" | cut -f2)"
-                log_info "next fire in ${s}s (window=$w)"
+                log_info "next fire in $(fmt_duration "$s") (window=$w)"
                 sleep "$s"
                 ;;
             *)  log_error "unexpected status $status"; sleep 60 ;;
