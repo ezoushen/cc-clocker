@@ -1,0 +1,7 @@
+.local/
+*.db
+*.db-wal
+*.db-shm
+*.log
+node_modules/
+.bats/
