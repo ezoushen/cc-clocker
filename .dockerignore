@@ -1,0 +1,11 @@
+.git
+.gitignore
+docs
+tests
+.bats
+*.db
+*.db-wal
+*.db-shm
+*.log
+node_modules
+.DS_Store
