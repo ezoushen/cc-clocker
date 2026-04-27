@@ -2,9 +2,14 @@
 # Schedule math. Portable date arithmetic via sqlite3.
 # Inputs are internal-only ISO8601 timestamps (already validated upstream).
 
+# next_fire_time: when to fire relative to a reset.
+# Delay defaults to 30s; override via CC_CLOCKER_PING_DELAY_SECONDS (integer).
+# Negative or non-integer values fall back to 30.
 next_fire_time() {
     local reset="$1"
-    sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('${reset}','+30 seconds'));"
+    local delay="${CC_CLOCKER_PING_DELAY_SECONDS:-30}"
+    [[ "$delay" =~ ^[0-9]+$ ]] || delay=30
+    sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('${reset}','+${delay} seconds'));"
 }
 
 seconds_until() {

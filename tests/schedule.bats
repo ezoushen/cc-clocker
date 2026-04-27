@@ -28,3 +28,18 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" -le 0 ]
 }
+
+@test "next_fire_time honors CC_CLOCKER_PING_DELAY_SECONDS" {
+    CC_CLOCKER_PING_DELAY_SECONDS=120 run next_fire_time "2026-04-27T19:00:00Z"
+    [ "$output" = "2026-04-27T19:02:00Z" ]
+}
+
+@test "next_fire_time falls back to 30s for non-integer delay" {
+    CC_CLOCKER_PING_DELAY_SECONDS="bogus" run next_fire_time "2026-04-27T19:00:00Z"
+    [ "$output" = "2026-04-27T19:00:30Z" ]
+}
+
+@test "next_fire_time falls back to 30s for negative delay" {
+    CC_CLOCKER_PING_DELAY_SECONDS="-5" run next_fire_time "2026-04-27T19:00:00Z"
+    [ "$output" = "2026-04-27T19:00:30Z" ]
+}

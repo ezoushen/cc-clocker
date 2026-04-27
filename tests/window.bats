@@ -119,6 +119,34 @@ PY
     [ -n "$r5" ]
 }
 
+@test "detect_window: CC_CLOCKER_5H_ANCHOR projects to next future 5h reset" {
+    _install_fixture active-5h.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
+    # Anchor: 12 hours ago. Next 5h reset must be in (now, now+5h].
+    local anchor
+    anchor="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-12 hours'));")"
+    run env CC_CLOCKER_5H_ANCHOR="$anchor" \
+        bash -c "source '$PROJECT_ROOT/lib/window.sh'; detect_window"
+    [ "$status" -eq 0 ]
+    r5=$(printf '%s' "$output" | cut -f3)
+    [ -n "$r5" ]
+    # r5 should be > now and <= now+5h
+    now_iso=$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now'));")
+    plus5=$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','+5 hours','+1 minute'));")
+    [[ "$r5" > "$now_iso" ]]
+    [[ "$r5" < "$plus5" ]]
+}
+
+@test "detect_window: CC_CLOCKER_7D_ANCHOR projects to next future 7d reset" {
+    _install_fixture active-5h.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
+    local anchor
+    anchor="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-3 days'));")"
+    run env CC_CLOCKER_7D_ANCHOR="$anchor" \
+        bash -c "source '$PROJECT_ROOT/lib/window.sh'; detect_window"
+    [ "$status" -eq 0 ]
+    r7=$(printf '%s' "$output" | cut -f4)
+    [ -n "$r7" ]
+}
+
 @test "detect_window: 5h reset chosen iff sooner than env 7d" {
     _install_fixture active-5h.jsonl "$CC_CLAUDE_HOME/projects/proj1/sess.jsonl"
     local far_future

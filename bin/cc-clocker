@@ -41,13 +41,19 @@ usage() {
 usage: cc-clocker <command> [args]
 
 Commands:
-  run       Start the clocker daemon (foreground)
-  status    Show last ping and next scheduled fire (5h + 7d aware)
-  tick      Fire one ping immediately
-  log [N]   Show last N pings (default 20)
-  init      Initialize DB + state dirs
-  stop      Stop running daemon
-  doctor    Check dependencies and auth
+  run                          Start the clocker daemon (foreground)
+  status                       Show last ping and next scheduled fire
+  tick                         Fire one ping immediately
+  log [N]                      Show last N pings (default 20)
+  init                         Initialize DB + state dirs
+  stop                         Stop running daemon
+  doctor                       Check dependencies and auth
+  set-anchor 5h|7d <ISO>       Save a known reset point for the current account
+                               (drift-free projection forever)
+  statusline-tee [cmd args..]  Wrap a real statusline command. Captures
+                               rate_limits + orgId from stdin, writes to
+                               \$CC_CLOCKER_CACHE_FILE, then forwards stdin
+                               to the wrapped command unchanged.
 EOF
 }
 
@@ -55,6 +61,67 @@ cmd_init() {
     mkdir -p "$CC_CLOCKER_HOME" "$CC_CLOCKER_STATE"
     db_init
     log_info "initialized $CC_CLOCKER_HOME"
+}
+
+cmd_set_anchor() {
+    local kind="${1:-}" iso="${2:-}"
+    case "$kind" in
+        5h|7d) ;;
+        *) echo "usage: cc-clocker set-anchor 5h|7d <ISO8601 UTC>" >&2; return 1 ;;
+    esac
+    if ! [[ "$iso" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]; then
+        echo "anchor must be ISO8601 UTC (e.g. 2026-04-27T16:20:00Z)" >&2
+        return 1
+    fi
+    cmd_init >/dev/null 2>&1 || true
+    local org_id
+    org_id="$(_current_org_id)"
+    if [ -z "$org_id" ]; then
+        echo "could not resolve orgId via 'claude auth status'; are you logged in?" >&2
+        return 1
+    fi
+    db_set_anchor "$org_id" "$kind" "$iso"
+    echo "saved $kind anchor for org $org_id: $iso"
+}
+
+cmd_statusline_tee() {
+    # Buffer stdin once; we need to consume it for parsing AND forward it to
+    # the wrapped command.
+    local input
+    input="$(cat)"
+
+    # Best-effort: extract rate_limits + orgId, write cache. Failures are
+    # silent — statusline must never break because the cache write failed.
+    {
+        local cache_file="${CC_CLOCKER_CACHE_FILE:-$HOME/.cc-clocker/rate-limits.json}"
+        local cache_dir
+        cache_dir="$(dirname "$cache_file")"
+        mkdir -p "$cache_dir" 2>/dev/null
+
+        local org_id r5 r7
+        org_id="$(_current_org_id)"
+        r5="$(printf '%s' "$input" | jq -r 'try .rate_limits.five_hour.resets_at // empty' 2>/dev/null)"
+        r7="$(printf '%s' "$input" | jq -r 'try .rate_limits.seven_day.resets_at // empty' 2>/dev/null)"
+
+        if [ -n "$org_id" ] && { [ -n "$r5" ] || [ -n "$r7" ]; }; then
+            local tmp="${cache_file}.tmp.$$"
+            jq -n \
+                --arg org "$org_id" \
+                --argjson r5 "${r5:-null}" \
+                --argjson r7 "${r7:-null}" \
+                '{org_id: $org, five_hour_resets_at: $r5, seven_day_resets_at: $r7, captured_at: now}' \
+                > "$tmp" 2>/dev/null \
+                && mv -f "$tmp" "$cache_file" 2>/dev/null
+            rm -f "$tmp" 2>/dev/null
+        fi
+    } 2>/dev/null
+
+    # Forward stdin to wrapped command (or echo it through if no command).
+    if [ "$#" -gt 0 ]; then
+        printf '%s' "$input" | "$@"
+    else
+        printf '%s' "$input"
+    fi
 }
 
 cmd_tick() {
@@ -179,9 +246,20 @@ cmd_doctor() {
     else
         echo "  no active window (run a real claude session to validate detection)"
     fi
-    if [ -z "${CC_CLOCKER_NEXT_7D_RESET:-}" ]; then
-        echo "  note: 7d window not auto-detected; export CC_CLOCKER_NEXT_7D_RESET=<ISO8601 UTC>"
-        echo "        if you want pings to also fire 30s after the 7d weekly reset"
+
+    echo "checking statusline rate-limits cache..."
+    local cache_file="${CC_CLOCKER_CACHE_FILE:-$HOME/.cc-clocker/rate-limits.json}"
+    if [ -f "$cache_file" ]; then
+        local cached_org cached_at
+        cached_org="$(jq -r 'try .org_id // empty' "$cache_file" 2>/dev/null)"
+        cached_at="$(jq -r 'try .captured_at // empty' "$cache_file" 2>/dev/null)"
+        echo "  found: $cache_file (org=$cached_org, captured_at=$cached_at)"
+    else
+        echo "  not found at $cache_file"
+        echo "  to enable drift-free, account-aware reset detection:"
+        echo "    1. Edit ~/.claude/settings.json statusLine.command to:"
+        echo "         $(command -v cc-clocker || echo cc-clocker) statusline-tee <your existing statusline command>"
+        echo "    2. Open any interactive claude session — the cache will populate."
     fi
 
     echo "checking user hooks (will fire on every ping)..."
@@ -225,13 +303,15 @@ main() {
     case "$cmd" in
         --version|-v) echo "$VERSION" ;;
         --help|-h)    usage ;;
-        run)          cmd_run "$@" ;;
-        status)       cmd_status "$@" ;;
-        tick)         cmd_tick "$@" ;;
-        log)          cmd_log "$@" ;;
-        init)         cmd_init "$@" ;;
-        stop)         cmd_stop "$@" ;;
-        doctor)       cmd_doctor "$@" ;;
+        run)             cmd_run "$@" ;;
+        status)          cmd_status "$@" ;;
+        tick)            cmd_tick "$@" ;;
+        log)             cmd_log "$@" ;;
+        init)            cmd_init "$@" ;;
+        stop)            cmd_stop "$@" ;;
+        doctor)          cmd_doctor "$@" ;;
+        set-anchor)      cmd_set_anchor "$@" ;;
+        statusline-tee)  cmd_statusline_tee "$@" ;;
         *)            echo "unknown command: $cmd" >&2; usage; exit 1 ;;
     esac
 }

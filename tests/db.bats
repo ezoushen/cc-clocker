@@ -77,3 +77,42 @@ setup() {
     run sqlite3 "$CC_CLOCKER_HOME/clocker.db" "SELECT count(*) FROM pings;"
     [ "$output" = "3" ]
 }
+
+@test "db_set_anchor / db_get_anchor round-trip 5h" {
+    db_init
+    db_set_anchor "org-1" 5h "2026-04-27T16:20:00Z"
+    run db_get_anchor "org-1" 5h
+    [ "$output" = "2026-04-27T16:20:00Z" ]
+}
+
+@test "db_set_anchor / db_get_anchor isolate by org_id" {
+    db_init
+    db_set_anchor "org-A" 5h "2026-04-27T10:00:00Z"
+    db_set_anchor "org-B" 5h "2026-04-27T20:00:00Z"
+    run db_get_anchor "org-B" 5h
+    [ "$output" = "2026-04-27T20:00:00Z" ]
+}
+
+@test "db_set_anchor upserts when row already exists" {
+    db_init
+    db_set_anchor "org-1" 5h "2026-04-27T10:00:00Z"
+    db_set_anchor "org-1" 5h "2026-04-27T15:00:00Z"
+    run db_get_anchor "org-1" 5h
+    [ "$output" = "2026-04-27T15:00:00Z" ]
+}
+
+@test "db_set_anchor stores 5h and 7d independently for same org" {
+    db_init
+    db_set_anchor "org-1" 5h "2026-04-27T10:00:00Z"
+    db_set_anchor "org-1" 7d "2026-05-01T14:00:00Z"
+    run db_get_anchor "org-1" 5h
+    [ "$output" = "2026-04-27T10:00:00Z" ]
+    run db_get_anchor "org-1" 7d
+    [ "$output" = "2026-05-01T14:00:00Z" ]
+}
+
+@test "db_set_anchor rejects unknown kind" {
+    db_init
+    run db_set_anchor "org-1" "bogus" "2026-04-27T10:00:00Z"
+    [ "$status" -ne 0 ]
+}

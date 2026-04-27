@@ -31,16 +31,30 @@ chmod +x "$APP_DIR/bin/cc-clocker"
 
 ln -sf "$APP_DIR/bin/cc-clocker" "$TARGET_DIR/cc-clocker"
 
+# Render the launchd plist from the template, substituting env-driven values.
+# Anchors and delay are optional — empty placeholders are stripped from the
+# rendered plist so launchd doesn't pass empty env vars.
+PLIST_TEMPLATE="$SOURCE_ROOT/contrib/launchd/com.github.ezoushen.cc-clocker.plist.template"
+PLIST_RENDERED="$APP_DIR/com.github.ezoushen.cc-clocker.plist"
+if [ -f "$PLIST_TEMPLATE" ]; then
+    sed \
+        -e "s|__CC_CLOCKER_5H_ANCHOR__|${CC_CLOCKER_5H_ANCHOR:-}|g" \
+        -e "s|__CC_CLOCKER_7D_ANCHOR__|${CC_CLOCKER_7D_ANCHOR:-}|g" \
+        -e "s|__CC_CLOCKER_PING_DELAY_SECONDS__|${CC_CLOCKER_PING_DELAY_SECONDS:-30}|g" \
+        "$PLIST_TEMPLATE" > "$PLIST_RENDERED"
+fi
+
 echo "installed:"
 echo "  app:    $APP_DIR"
 echo "  link:   $TARGET_DIR/cc-clocker -> $APP_DIR/bin/cc-clocker"
+echo "  plist:  $PLIST_RENDERED"
 
 cat <<EOF
 
 Autostart options:
 
   macOS (launchd):
-    cp $SOURCE_ROOT/contrib/launchd/com.github.ezoushen.cc-clocker.plist ~/Library/LaunchAgents/
+    cp $PLIST_RENDERED ~/Library/LaunchAgents/
     launchctl load ~/Library/LaunchAgents/com.github.ezoushen.cc-clocker.plist
 
   Linux (systemd --user):

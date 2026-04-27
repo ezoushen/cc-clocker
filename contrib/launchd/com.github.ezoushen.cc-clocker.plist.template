@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.github.ezoushen.cc-clocker</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>exec "$HOME/.local/bin/cc-clocker" run</string>
+    </array>
+    <!--
+        Optional anchors and tuning. Edit the installed copy at
+        ~/Library/LaunchAgents/com.github.ezoushen.cc-clocker.plist and
+        re-run `launchctl unload && launchctl load` to apply.
+
+          CC_CLOCKER_5H_ANCHOR             any past 5h reset, ISO8601 UTC
+                                           (drift-free 5h projection)
+          CC_CLOCKER_7D_ANCHOR             same for the 7d weekly reset
+          CC_CLOCKER_NEXT_7D_RESET         one-shot next 7d reset, ISO8601 UTC
+          CC_CLOCKER_PING_DELAY_SECONDS    seconds after reset to fire ping
+                                           (default 30)
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CC_CLOCKER_5H_ANCHOR</key>
+        <string>__CC_CLOCKER_5H_ANCHOR__</string>
+        <key>CC_CLOCKER_7D_ANCHOR</key>
+        <string>__CC_CLOCKER_7D_ANCHOR__</string>
+        <key>CC_CLOCKER_PING_DELAY_SECONDS</key>
+        <string>__CC_CLOCKER_PING_DELAY_SECONDS__</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/cc-clocker.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/cc-clocker.err.log</string>
+</dict>
+</plist>

@@ -23,7 +23,33 @@ CREATE TABLE IF NOT EXISTS pings (
     ok              INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pings_ts ON pings(ts);
+
+-- Per-account anchors. Switching Anthropic accounts (different orgId)
+-- invalidates the rate-limits cache, and we fall back to whatever anchor
+-- was last set for that account, if any.
+CREATE TABLE IF NOT EXISTS accounts (
+    org_id      TEXT PRIMARY KEY,
+    anchor_5h   TEXT,
+    anchor_7d   TEXT,
+    updated_at  TEXT NOT NULL
+);
 SQL
+}
+
+# db_set_anchor <org_id> <5h|7d> <iso8601_utc>
+db_set_anchor() {
+    local org_id="$1" kind="$2" iso="$3"
+    case "$kind" in 5h|7d) ;; *) return 1 ;; esac
+    local col="anchor_$kind"
+    _db_exec "INSERT INTO accounts(org_id, $col, updated_at) VALUES('$org_id', '$iso', datetime('now')) ON CONFLICT(org_id) DO UPDATE SET $col='$iso', updated_at=datetime('now');"
+}
+
+# db_get_anchor <org_id> <5h|7d>
+db_get_anchor() {
+    local org_id="$1" kind="$2"
+    case "$kind" in 5h|7d) ;; *) return 1 ;; esac
+    local col="anchor_$kind"
+    _db_exec "SELECT COALESCE($col, '') FROM accounts WHERE org_id='$org_id';"
 }
 
 db_insert_ping() {
