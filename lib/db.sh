@@ -25,3 +25,17 @@ CREATE TABLE IF NOT EXISTS pings (
 CREATE INDEX IF NOT EXISTS idx_pings_ts ON pings(ts);
 SQL
 }
+
+db_insert_ping() {
+    local ts="$1" reset="$2" which="$3" chars="$4" ok="$5"
+    _db_exec "INSERT INTO pings(ts, reset_detected, which_window, response_chars, ok) VALUES('$ts', '$reset', '$which', $chars, $ok);"
+}
+
+db_last_ping() {
+    _db_exec -separator $'\t' "SELECT ts, reset_detected, which_window, response_chars, ok FROM pings ORDER BY id DESC LIMIT 1;"
+}
+
+db_recent_pings() {
+    local n="${1:-20}"
+    _db_exec -separator $'\t' "SELECT ts, reset_detected, which_window, response_chars, ok FROM pings ORDER BY id DESC LIMIT $n;"
+}
