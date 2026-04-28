@@ -61,6 +61,13 @@ db_last_ping() {
     _db_exec -separator $'\t' "SELECT ts, reset_detected, which_window, response_chars, ok FROM pings ORDER BY id DESC LIMIT 1;"
 }
 
+# Most recent successful ping ts, or empty. A successful ping is a confirmed
+# message-to-server event and therefore a high-quality 5h-window-start
+# anchor (the window includes that ping; reset = ts + 5h).
+db_last_successful_ping_ts() {
+    _db_exec "SELECT ts FROM pings WHERE ok=1 ORDER BY id DESC LIMIT 1;"
+}
+
 db_recent_pings() {
     local n="${1:-20}"
     [[ "$n" =~ ^[0-9]+$ ]] || n=20

@@ -119,11 +119,68 @@ detect_window() {
     #   4. CC_CLOCKER_NEXT_7D_RESET one-shot env var.
     #   5. JSONL walk (best-effort, drift-prone).
 
-    local org_id cached
+    local org_id raw_5h_epoch="" raw_7d_epoch=""
     org_id="$(_current_org_id)"
-    if [ -n "$org_id" ] && cached="$(_read_cached_resets "$org_id" 2>/dev/null)"; then
-        reset_5h="$(printf '%s' "$cached" | cut -f1)"
-        reset_7d="$(printf '%s' "$cached" | cut -f2)"
+
+    # Read the cache ONCE, raw. We want both:
+    #   - the raw recorded resets_at epochs (ground truth, may be past)
+    #   - the cache-derived ISO5h/ISO7d (future or projected)
+    if [ -n "$org_id" ] && [ -f "$CC_CLOCKER_CACHE_FILE" ]; then
+        local cached_org
+        cached_org="$(jq -r 'try .org_id // empty' "$CC_CLOCKER_CACHE_FILE" 2>/dev/null)"
+        if [ "$cached_org" = "$org_id" ]; then
+            raw_5h_epoch="$(jq -r 'try .five_hour_resets_at // empty' "$CC_CLOCKER_CACHE_FILE" 2>/dev/null)"
+            raw_7d_epoch="$(jq -r 'try .seven_day_resets_at // empty' "$CC_CLOCKER_CACHE_FILE" 2>/dev/null)"
+        fi
+    fi
+
+    local now_epoch
+    now_epoch="$(date +%s)"
+
+    if [[ "$raw_5h_epoch" =~ ^[0-9]+$ ]]; then
+        local raw_5h_iso
+        raw_5h_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $raw_5h_epoch, 'unixepoch');")"
+        if [ "$raw_5h_epoch" -gt "$now_epoch" ]; then
+            # Cache fresh: server-authoritative.
+            reset_5h="$raw_5h_iso"
+        else
+            # Cache stale. Two anchor candidates:
+            #   A) Project the cached value forward by whole 5h (assumes
+            #      uninterrupted activity — wrong if daemon missed a fire).
+            #   B) Latest successful db ping ts + 5h. Definitive: a successful
+            #      ping is a confirmed message-to-server event that started
+            #      (or is contained in) a window. ts + 5h is the upper bound
+            #      for that window's reset.
+            # Pick (B) when the ping happened AFTER the cached window ended;
+            # otherwise (A).
+            local last_ok_ts=""
+            if command -v db_last_successful_ping_ts >/dev/null 2>&1; then
+                last_ok_ts="$(db_last_successful_ping_ts 2>/dev/null || true)"
+            fi
+            if [ -n "$last_ok_ts" ] \
+               && [[ "$last_ok_ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] \
+               && [[ "$last_ok_ts" > "$raw_5h_iso" ]]; then
+                local cand
+                cand="$(_iso_offset "$last_ok_ts" '+5 hours')" || cand=""
+                if [ -n "$cand" ] && [[ "$cand" > "$now_iso" ]]; then
+                    reset_5h="$cand"
+                fi
+            fi
+            # Fallback to projection if the ping override didn't apply.
+            if [ -z "$reset_5h" ]; then
+                reset_5h="$(_next_reset_from_anchor "$raw_5h_iso" 18000)"
+            fi
+        fi
+    fi
+
+    if [[ "$raw_7d_epoch" =~ ^[0-9]+$ ]]; then
+        local raw_7d_iso
+        raw_7d_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $raw_7d_epoch, 'unixepoch');")"
+        if [ "$raw_7d_epoch" -gt "$now_epoch" ]; then
+            reset_7d="$raw_7d_iso"
+        else
+            reset_7d="$(_next_reset_from_anchor "$raw_7d_iso" 604800)"
+        fi
     fi
 
     # 5h fallbacks (each only fills if not already set above).

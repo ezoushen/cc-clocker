@@ -127,3 +127,45 @@ setup() {
     [ "$r7_epoch" -gt "$now" ]
     [ "$((r7_epoch - now))" -le 604800 ]
 }
+
+@test "detect_window: ping override beats projection when ping happens after stale cache" {
+    # Cache says window expired 1h ago.
+    # A successful ping landed 30m ago (between expiration and now).
+    # The new active window started at the ping (not at cache.reset+epsilon),
+    # so reset = ping_ts + 5h (~4h 30m from now), NOT cache.reset + 5h (~4h from now).
+    local cache_past=$(($(date +%s) - 3600))
+    jq -n --arg o "org-PING" --argjson r5 "$cache_past" \
+        '{org_id:$o,five_hour_resets_at:$r5,seven_day_resets_at:null,captured_at:now}' \
+        > "$CC_CLOCKER_CACHE_FILE"
+
+    local ping_ts
+    ping_ts="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-30 minutes'));")"
+    db_insert_ping "$ping_ts" "anchor" "5h" 2 1
+
+    CC_CLOCKER_ORG_ID="org-PING" run detect_window
+    [ "$status" -eq 0 ]
+    r5=$(printf '%s' "$output" | cut -f3)
+    expected=$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('$ping_ts','+5 hours'));")
+    [ "$r5" = "$expected" ]
+}
+
+@test "detect_window: cache projection used when no ping after cache expiration" {
+    # Cache expired 1h ago. No successful ping after.
+    # Falls back to anchor-style projection: cache + 5h*N -> ~4h from now.
+    local cache_past=$(($(date +%s) - 3600))
+    jq -n --arg o "org-NOPING" --argjson r5 "$cache_past" \
+        '{org_id:$o,five_hour_resets_at:$r5,seven_day_resets_at:null,captured_at:now}' \
+        > "$CC_CLOCKER_CACHE_FILE"
+
+    # Insert a ping that pre-dates the cache (NOT after expiration).
+    local old_ping
+    old_ping="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-3 hours'));")"
+    db_insert_ping "$old_ping" "anchor" "5h" 2 1
+
+    CC_CLOCKER_ORG_ID="org-NOPING" run detect_window
+    [ "$status" -eq 0 ]
+    r5=$(printf '%s' "$output" | cut -f3)
+    cache_iso=$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $cache_past, 'unixepoch');")
+    expected=$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('$cache_iso','+5 hours'));")
+    [ "$r5" = "$expected" ]
+}
