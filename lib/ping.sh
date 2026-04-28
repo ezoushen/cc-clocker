@@ -33,6 +33,11 @@ fire_ping() {
         log_info "ping ($which) ok ($chars chars)"
     fi
 
-    db_insert_ping "$ts" "$reset" "$which" "$chars" "$ok"
+    # `|| true`: a transient sqlite write failure must not kill a long-running
+    # daemon. Surface it via stderr instead. set -e in the caller would
+    # otherwise propagate db_insert_ping's nonzero exit and bring everything
+    # down before this function even reaches `return "$rc"`.
+    db_insert_ping "$ts" "$reset" "$which" "$chars" "$ok" \
+        || log_warn "db_insert_ping failed; ping NOT recorded"
     return "$rc"
 }

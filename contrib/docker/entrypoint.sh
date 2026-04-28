@@ -36,7 +36,9 @@ fi
 # 3. If the daemon is not already running, start it in the background so
 #    pings happen even when no shell is attached. Logs go to /tmp.
 if ! pgrep -f "cc-clocker run" >/dev/null 2>&1; then
-    nohup /usr/local/bin/cc-clocker run >/tmp/cc-clocker.log 2>&1 &
+    # APPEND, never truncate. We want to be able to look back when the
+    # daemon dies for any reason.
+    nohup /usr/local/bin/cc-clocker run >>/tmp/cc-clocker.log 2>&1 &
 fi
 
 # 4. Friendly first-attach hint.

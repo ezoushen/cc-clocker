@@ -33,7 +33,11 @@ run_once_or_sleep() {
     fire_at="$(next_fire_time "$next_reset")"
     sleep_s="$(seconds_until "$fire_at")"
     if [ "$sleep_s" -le 0 ]; then
-        fire_ping "$next_reset" "$which"
+        # Tolerate fire_ping nonzero exits — a failed ping is logged in the
+        # db (ok=0) and we MUST keep the loop alive. Without `|| true`, the
+        # caller's set -e would propagate the claude exit code and kill the
+        # daemon mid-iteration, before db_insert_ping completes.
+        fire_ping "$next_reset" "$which" || true
         return 0
     fi
     printf '%s\t%s\t%s\n' "$sleep_s" "$which" "$next_reset"
