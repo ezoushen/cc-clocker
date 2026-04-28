@@ -44,13 +44,17 @@ setup() {
     [ "$status" -ne 0 ]
 }
 
-@test "_read_cached_resets drops past resets" {
+@test "_read_cached_resets projects past 5h forward instead of dropping" {
+    # 1 hour ago -> next 5h reset = original + 5h = 4h from now (in future).
     local past=$(($(date +%s) - 3600))
     jq -n --arg o "org-X" --argjson r5 "$past" \
         '{org_id:$o,five_hour_resets_at:$r5,seven_day_resets_at:null,captured_at:now}' \
         > "$CC_CLOCKER_CACHE_FILE"
     run _read_cached_resets "org-X"
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
+    r5=$(printf '%s' "$output" | cut -f1)
+    r5_epoch=$(sqlite3 :memory: "SELECT strftime('%s','$r5');")
+    [ "$r5_epoch" -gt "$(date +%s)" ]
 }
 
 @test "detect_window prefers cache over walk when CC_CLOCKER_ORG_ID matches" {
@@ -89,4 +93,37 @@ setup() {
     r5=$(printf '%s' "$output" | cut -f3)
     # 16:20:00 + N*5h projection — must end in :20:00Z
     [[ "$r5" == *":20:00Z" ]]
+}
+
+@test "_read_cached_resets projects past 5h reset forward as anchor" {
+    # Cached reset 12 hours ago -> daemon should project to next future reset
+    # (within next 5h).
+    local past=$(($(date +%s) - 43200))
+    jq -n --arg o "org-X" --argjson r5 "$past" \
+        '{org_id:$o,five_hour_resets_at:$r5,seven_day_resets_at:null,captured_at:now}' \
+        > "$CC_CLOCKER_CACHE_FILE"
+    run _read_cached_resets "org-X"
+    [ "$status" -eq 0 ]
+    r5=$(printf '%s' "$output" | cut -f1)
+    [ -n "$r5" ]
+    # Must be in the future, but no more than 5h ahead.
+    r5_epoch=$(sqlite3 :memory: "SELECT strftime('%s','$r5');")
+    now=$(date +%s)
+    [ "$r5_epoch" -gt "$now" ]
+    [ "$((r5_epoch - now))" -le 18000 ]
+}
+
+@test "_read_cached_resets projects past 7d reset forward as anchor" {
+    local past=$(($(date +%s) - 86400))   # 1 day ago
+    jq -n --arg o "org-X" --argjson r7 "$past" \
+        '{org_id:$o,five_hour_resets_at:null,seven_day_resets_at:$r7,captured_at:now}' \
+        > "$CC_CLOCKER_CACHE_FILE"
+    run _read_cached_resets "org-X"
+    [ "$status" -eq 0 ]
+    r7=$(printf '%s' "$output" | cut -f2)
+    [ -n "$r7" ]
+    r7_epoch=$(sqlite3 :memory: "SELECT strftime('%s','$r7');")
+    now=$(date +%s)
+    [ "$r7_epoch" -gt "$now" ]
+    [ "$((r7_epoch - now))" -le 604800 ]
 }

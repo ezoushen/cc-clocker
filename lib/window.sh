@@ -27,9 +27,12 @@ _current_org_id() {
 }
 
 # _read_cached_resets <org_id>
-# Print "<reset_5h_iso>\t<reset_7d_iso>" if the cache file exists, the
-# org_id matches, and at least one of the resets is in the future. Empty
-# fields when expired or missing. Exit 1 if the cache is unusable.
+# Print "<reset_5h_iso>\t<reset_7d_iso>" if the cache file exists and the
+# org_id matches. A cached reset that has already passed is treated as an
+# ANCHOR — we project it forward by whole window-lengths to the next
+# future reset, exactly like CC_CLOCKER_*_ANCHOR. This keeps the daemon
+# scheduling correctly between interactive claude sessions, since pings
+# (--print mode) don't refresh the cache.
 # $1 = current org_id (empty -> skip cache)
 _read_cached_resets() {
     local current_org="$1"
@@ -47,11 +50,24 @@ _read_cached_resets() {
     local now_epoch r5_iso="" r7_iso=""
     now_epoch="$(date +%s)"
 
-    if [[ "$r5_epoch" =~ ^[0-9]+$ ]] && [ "$r5_epoch" -gt "$now_epoch" ]; then
-        r5_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $r5_epoch, 'unixepoch');")"
+    if [[ "$r5_epoch" =~ ^[0-9]+$ ]]; then
+        local anchor_iso
+        anchor_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $r5_epoch, 'unixepoch');")"
+        if [ "$r5_epoch" -gt "$now_epoch" ]; then
+            r5_iso="$anchor_iso"
+        else
+            # Cached value is in the past — project it forward 5h at a time.
+            r5_iso="$(_next_reset_from_anchor "$anchor_iso" 18000)"
+        fi
     fi
-    if [[ "$r7_epoch" =~ ^[0-9]+$ ]] && [ "$r7_epoch" -gt "$now_epoch" ]; then
-        r7_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $r7_epoch, 'unixepoch');")"
+    if [[ "$r7_epoch" =~ ^[0-9]+$ ]]; then
+        local anchor_iso
+        anchor_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $r7_epoch, 'unixepoch');")"
+        if [ "$r7_epoch" -gt "$now_epoch" ]; then
+            r7_iso="$anchor_iso"
+        else
+            r7_iso="$(_next_reset_from_anchor "$anchor_iso" 604800)"
+        fi
     fi
 
     [ -n "$r5_iso" ] || [ -n "$r7_iso" ] || return 1
