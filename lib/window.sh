@@ -119,73 +119,56 @@ detect_window() {
     #   4. CC_CLOCKER_NEXT_7D_RESET one-shot env var.
     #   5. JSONL walk (best-effort, drift-prone).
 
-    local org_id raw_5h_epoch="" raw_7d_epoch=""
+    local org_id raw_5h_epoch="" raw_7d_epoch="" cache_captured_epoch=""
     org_id="$(_current_org_id)"
 
-    # Read the cache ONCE, raw. We want both:
-    #   - the raw recorded resets_at epochs (ground truth, may be past)
-    #   - the cache-derived ISO5h/ISO7d (future or projected)
+    # Read cache once. We need raw resets_at epochs AND captured_at so we
+    # can decide whether the cache is FRESH (server-authoritative — wins
+    # over everything) or STALE (one of several anchor candidates).
     if [ -n "$org_id" ] && [ -f "$CC_CLOCKER_CACHE_FILE" ]; then
         local cached_org
         cached_org="$(jq -r 'try .org_id // empty' "$CC_CLOCKER_CACHE_FILE" 2>/dev/null)"
         if [ "$cached_org" = "$org_id" ]; then
             raw_5h_epoch="$(jq -r 'try .five_hour_resets_at // empty' "$CC_CLOCKER_CACHE_FILE" 2>/dev/null)"
             raw_7d_epoch="$(jq -r 'try .seven_day_resets_at // empty' "$CC_CLOCKER_CACHE_FILE" 2>/dev/null)"
+            cache_captured_epoch="$(jq -r 'try (.captured_at | floor) // empty' "$CC_CLOCKER_CACHE_FILE" 2>/dev/null)"
         fi
     fi
 
     local now_epoch
     now_epoch="$(date +%s)"
 
-    if [[ "$raw_5h_epoch" =~ ^[0-9]+$ ]]; then
-        local raw_5h_iso
-        raw_5h_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $raw_5h_epoch, 'unixepoch');")"
-        if [ "$raw_5h_epoch" -gt "$now_epoch" ]; then
-            # Cache fresh: server-authoritative.
-            reset_5h="$raw_5h_iso"
-        else
-            # Cache stale. Two anchor candidates:
-            #   A) Project the cached value forward by whole 5h (assumes
-            #      uninterrupted activity — wrong if daemon missed a fire).
-            #   B) Latest successful db ping ts + 5h. Definitive: a successful
-            #      ping is a confirmed message-to-server event that started
-            #      (or is contained in) a window. ts + 5h is the upper bound
-            #      for that window's reset.
-            # Pick (B) when the ping happened AFTER the cached window ended;
-            # otherwise (A).
-            local last_ok_ts=""
-            if command -v db_last_successful_ping_ts >/dev/null 2>&1; then
-                last_ok_ts="$(db_last_successful_ping_ts 2>/dev/null || true)"
-            fi
-            if [ -n "$last_ok_ts" ] \
-               && [[ "$last_ok_ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] \
-               && [[ "$last_ok_ts" > "$raw_5h_iso" ]]; then
-                local cand
-                cand="$(_iso_offset "$last_ok_ts" '+5 hours')" || cand=""
-                # Accept cand even if it's past — that means we missed the
-                # fire moment and should ping immediately. The scheduler
-                # turns past fire_at into a "fire now" decision; the new
-                # ping then becomes the next iteration's anchor.
-                [ -n "$cand" ] && reset_5h="$cand"
-            fi
-            # Fallback to projection if the ping override didn't apply.
-            if [ -z "$reset_5h" ]; then
-                reset_5h="$(_next_reset_from_anchor "$raw_5h_iso" 18000)"
-            fi
+    # Cache freshness: captured within the window length AND value still
+    # in the future. A 36h-old cache might say the 5h reset is "in the
+    # future" via projection, but external usage on other hosts could
+    # have shifted the actual server window since — so we only trust raw
+    # cache when captured_at is recent.
+    local cache_fresh_5h=0 cache_fresh_7d=0
+    if [[ "$cache_captured_epoch" =~ ^[0-9]+$ ]]; then
+        local cache_age=$((now_epoch - cache_captured_epoch))
+        if [[ "$raw_5h_epoch" =~ ^[0-9]+$ ]] \
+           && [ "$raw_5h_epoch" -gt "$now_epoch" ] \
+           && [ "$cache_age" -lt 18000 ]; then
+            cache_fresh_5h=1
+        fi
+        if [[ "$raw_7d_epoch" =~ ^[0-9]+$ ]] \
+           && [ "$raw_7d_epoch" -gt "$now_epoch" ] \
+           && [ "$cache_age" -lt 604800 ]; then
+            cache_fresh_7d=1
         fi
     fi
 
-    if [[ "$raw_7d_epoch" =~ ^[0-9]+$ ]]; then
-        local raw_7d_iso
-        raw_7d_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $raw_7d_epoch, 'unixepoch');")"
-        if [ "$raw_7d_epoch" -gt "$now_epoch" ]; then
-            reset_7d="$raw_7d_iso"
-        else
-            reset_7d="$(_next_reset_from_anchor "$raw_7d_iso" 604800)"
-        fi
+    # Priority 1: FRESH cache. Server-authoritative.
+    if [ "$cache_fresh_5h" = "1" ]; then
+        reset_5h="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $raw_5h_epoch, 'unixepoch');")"
+    fi
+    if [ "$cache_fresh_7d" = "1" ]; then
+        reset_7d="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $raw_7d_epoch, 'unixepoch');")"
     fi
 
-    # 5h fallbacks (each only fills if not already set above).
+    # Priority 2: per-account DB anchor (user-asserted from dashboard).
+    # Beats stale cache, which can mislead when external usage shifted
+    # the server-side window without our cache being refreshed.
     if [ -z "$reset_5h" ] && [ -n "$org_id" ]; then
         local db_anchor
         db_anchor="$(db_get_anchor "$org_id" 5h 2>/dev/null)"
@@ -193,6 +176,42 @@ detect_window() {
            && [[ "$db_anchor" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]; then
             reset_5h="$(_next_reset_from_anchor "$db_anchor" 18000)"
         fi
+    fi
+    if [ -z "$reset_7d" ] && [ -n "$org_id" ]; then
+        local db_anchor
+        db_anchor="$(db_get_anchor "$org_id" 7d 2>/dev/null)"
+        if [ -n "$db_anchor" ] \
+           && [[ "$db_anchor" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]; then
+            reset_7d="$(_next_reset_from_anchor "$db_anchor" 604800)"
+        fi
+    fi
+
+    # Priority 3: STALE cache as best-effort anchor. For 5h we also try
+    # a "ping override": if a successful ping landed AFTER the cached
+    # reset, prefer ts+5h (a confirmed message event is a tighter anchor
+    # than projection across an unknown gap).
+    if [ -z "$reset_5h" ] && [[ "$raw_5h_epoch" =~ ^[0-9]+$ ]]; then
+        local raw_5h_iso
+        raw_5h_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $raw_5h_epoch, 'unixepoch');")"
+        local last_ok_ts=""
+        if command -v db_last_successful_ping_ts >/dev/null 2>&1; then
+            last_ok_ts="$(db_last_successful_ping_ts 2>/dev/null || true)"
+        fi
+        if [ -n "$last_ok_ts" ] \
+           && [[ "$last_ok_ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] \
+           && [[ "$last_ok_ts" > "$raw_5h_iso" ]]; then
+            local cand
+            cand="$(_iso_offset "$last_ok_ts" '+5 hours')" || cand=""
+            [ -n "$cand" ] && reset_5h="$cand"
+        fi
+        if [ -z "$reset_5h" ]; then
+            reset_5h="$(_next_reset_from_anchor "$raw_5h_iso" 18000)"
+        fi
+    fi
+    if [ -z "$reset_7d" ] && [[ "$raw_7d_epoch" =~ ^[0-9]+$ ]]; then
+        local raw_7d_iso
+        raw_7d_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', $raw_7d_epoch, 'unixepoch');")"
+        reset_7d="$(_next_reset_from_anchor "$raw_7d_iso" 604800)"
     fi
     if [ -z "$reset_5h" ] \
        && [ -n "${CC_CLOCKER_5H_ANCHOR:-}" ] \
