@@ -164,3 +164,29 @@ PY
     [ "$r7" = "$far_future" ]
     [[ "$r5" < "$r7" ]]
 }
+
+@test "_next_reset_from_anchor: exact-boundary returns now (no overshoot)" {
+    # Anchor exactly N*5h ago -> next reset = now.
+    # Old buggy formula would return anchor + (N+1)*5h, causing skip.
+    local anchor
+    anchor="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-10 hours'));")"
+    local now_iso
+    now_iso="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now');")"
+    run bash -c "source '$PROJECT_ROOT/lib/window.sh'; _next_reset_from_anchor '$anchor' 18000"
+    [ "$status" -eq 0 ]
+    # Result should be at most a few seconds after now (since anchor was -10h,
+    # +10h projection = now). Use sqlite to compute the diff.
+    diff=$(sqlite3 :memory: "SELECT CAST((julianday('$output') - julianday('$now_iso')) * 86400 AS INTEGER);")
+    # Must be very small (close to zero), not 18000 (the buggy overshoot).
+    [ "$diff" -ge 0 ] && [ "$diff" -lt 30 ]
+}
+
+@test "_next_reset_from_anchor: 1s past boundary advances to next" {
+    local anchor
+    anchor="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-5 hours','-1 second'));")"
+    run bash -c "source '$PROJECT_ROOT/lib/window.sh'; _next_reset_from_anchor '$anchor' 18000"
+    [ "$status" -eq 0 ]
+    diff=$(sqlite3 :memory: "SELECT CAST((julianday('$output') - julianday('now')) * 86400 AS INTEGER);")
+    # Expect ~5h - 1s = 17999s in future
+    [ "$diff" -gt 17900 ] && [ "$diff" -le 18000 ]
+}

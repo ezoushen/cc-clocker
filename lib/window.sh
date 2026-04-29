@@ -284,11 +284,20 @@ SQL
 # stdout: ISO8601 UTC of next reset, or empty on error.
 _next_reset_from_anchor() {
     local anchor="$1" period="$2"
+    # Smallest k >= 0 such that anchor + k*period >= now. Integer ceil:
+    #   k = (diff + period - 1) / period   when diff > 0
+    #   k = 0                                when now <= anchor
+    #
+    # The previous formula was floor(diff/period) + 1, which over-shoots
+    # by one whole period at every exact boundary. At the wake-up moment
+    # of a scheduled fire (now == anchor + N*period exactly), it returned
+    # anchor + (N+1)*period — making the daemon skip its own fire and
+    # sleep until the NEXT period.
     sqlite3 :memory: 2>/dev/null <<SQL
 SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('$anchor', '+' || (
     CASE
-        WHEN strftime('%s','now') < strftime('%s','$anchor') THEN 0
-        ELSE ((CAST((strftime('%s','now') - strftime('%s','$anchor')) / $period AS INTEGER) + 1) * $period)
+        WHEN strftime('%s','now') <= strftime('%s','$anchor') THEN 0
+        ELSE (CAST((strftime('%s','now') - strftime('%s','$anchor') + $period - 1) / $period AS INTEGER) * $period)
     END
 ) || ' seconds'));
 SQL

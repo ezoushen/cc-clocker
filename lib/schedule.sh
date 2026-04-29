@@ -58,30 +58,38 @@ fire_now() {
 }
 
 # run_loop: forever. Honors RUN_LOOP_ITERATIONS env for tests.
+#
+# DOES NOT re-detect after sleeping to a scheduled fire moment. Re-detecting
+# at the boundary advances the projection past the current reset, causing
+# the daemon to perpetually skip its own fires (anchor + N*period vs anchor
+# + (N+1)*period). We commit to the originally-decided reset, sleep until
+# its fire_at, fire, then idle past the boundary so the NEXT detection
+# advances cleanly.
 run_loop() {
     local iters="${RUN_LOOP_ITERATIONS:-0}"
     local i=0
     while :; do
-        local out status=0
-        out="$(run_once_or_sleep)" || status=$?
-        case "$status" in
-            0)
-                # After a fire (success or fail), pause briefly. Prevents
-                # tight retry loops when claude keeps failing, and lets the
-                # ping ts settle in the db before the next detect_window.
-                sleep 60
-                ;;
-            2)  sleep 300 ;;
-            3)
-                local s
-                s="$(printf '%s' "$out" | cut -f1)"
-                local w
-                w="$(printf '%s' "$out" | cut -f2)"
-                log_info "next fire in $(fmt_duration "$s") (window=$w)"
-                sleep "$s"
-                ;;
-            *)  log_error "unexpected status $status"; sleep 60 ;;
-        esac
+        local detected next_reset which fire_at sleep_s
+        if ! detected="$(detect_window)"; then
+            log_warn "no active 5h or 7d window detected; will sleep + retry"
+            sleep 300
+        else
+            next_reset="$(printf '%s' "$detected" | cut -f1)"
+            which="$(printf '%s' "$detected" | cut -f2)"
+            fire_at="$(next_fire_time "$next_reset")"
+            sleep_s="$(seconds_until "$fire_at")"
+            if [ "$sleep_s" -gt 0 ]; then
+                log_info "next fire in $(fmt_duration "$sleep_s") (window=$which)"
+                sleep "$sleep_s"
+            fi
+            # Fire on the originally chosen reset — NOT on whatever
+            # detect_window would say now (it would have advanced).
+            fire_ping "$next_reset" "$which" || true
+            # Idle past the boundary so the next detect_window iteration
+            # projects cleanly to the SUBSEQUENT reset. 60s is well above
+            # the default 30s ping delay and any practical clock skew.
+            sleep 60
+        fi
         i=$((i+1))
         if [ "$iters" -gt 0 ] && [ "$i" -ge "$iters" ]; then
             return 0
