@@ -169,3 +169,26 @@ setup() {
     expected=$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('$cache_iso','+5 hours'));")
     [ "$r5" = "$expected" ]
 }
+
+@test "detect_window: past ping override yields past reset (so scheduler fires now)" {
+    # Cache expired 6h ago; last successful ping was 5h 30m ago (after cache
+    # expiration). cand = ping + 5h = 30 min ago. Daemon should expose this
+    # past reset so the scheduler fires immediately and starts a new window.
+    local cache_past=$(($(date +%s) - 21600))
+    jq -n --arg o "org-MISS" --argjson r5 "$cache_past" \
+        '{org_id:$o,five_hour_resets_at:$r5,seven_day_resets_at:null,captured_at:now}' \
+        > "$CC_CLOCKER_CACHE_FILE"
+
+    local ping_ts
+    ping_ts="$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now','-5 hours','-30 minutes'));")"
+    db_insert_ping "$ping_ts" "anchor" "5h" 2 1
+
+    CC_CLOCKER_ORG_ID="org-MISS" run detect_window
+    [ "$status" -eq 0 ]
+    r5=$(printf '%s' "$output" | cut -f3)
+    expected=$(sqlite3 :memory: "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', datetime('$ping_ts','+5 hours'));")
+    [ "$r5" = "$expected" ]
+    # Should be in the past (so scheduler fires now)
+    r5_epoch=$(sqlite3 :memory: "SELECT strftime('%s','$r5');")
+    [ "$r5_epoch" -lt "$(date +%s)" ]
+}

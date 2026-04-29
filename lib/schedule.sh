@@ -65,7 +65,12 @@ run_loop() {
         local out status=0
         out="$(run_once_or_sleep)" || status=$?
         case "$status" in
-            0)  : ;;
+            0)
+                # After a fire (success or fail), pause briefly. Prevents
+                # tight retry loops when claude keeps failing, and lets the
+                # ping ts settle in the db before the next detect_window.
+                sleep 60
+                ;;
             2)  sleep 300 ;;
             3)
                 local s

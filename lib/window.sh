@@ -162,9 +162,11 @@ detect_window() {
                && [[ "$last_ok_ts" > "$raw_5h_iso" ]]; then
                 local cand
                 cand="$(_iso_offset "$last_ok_ts" '+5 hours')" || cand=""
-                if [ -n "$cand" ] && [[ "$cand" > "$now_iso" ]]; then
-                    reset_5h="$cand"
-                fi
+                # Accept cand even if it's past — that means we missed the
+                # fire moment and should ping immediately. The scheduler
+                # turns past fire_at into a "fire now" decision; the new
+                # ping then becomes the next iteration's anchor.
+                [ -n "$cand" ] && reset_5h="$cand"
             fi
             # Fallback to projection if the ping override didn't apply.
             if [ -z "$reset_5h" ]; then
